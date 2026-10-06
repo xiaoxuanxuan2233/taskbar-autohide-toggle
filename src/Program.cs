@@ -8,8 +8,8 @@ using System.Threading;
 using System.Windows.Forms;
 using System.Xml.Serialization;
 
-[assembly: System.Reflection.AssemblyVersion("2.0.1.0")]
-[assembly: System.Reflection.AssemblyFileVersion("2.0.1.0")]
+[assembly: System.Reflection.AssemblyVersion("2.0.2.0")]
+[assembly: System.Reflection.AssemblyFileVersion("2.0.2.0")]
 [assembly: System.Reflection.AssemblyTitle("Taskbar Toggle")]
 
 public class Preferences {
@@ -57,7 +57,7 @@ static class Native {
         }
     }
     public static bool AutoHide {
-        get { var data = new APPBARDATA(); data.Size = (uint)Marshal.SizeOf(data); return (SHAppBarMessage(4, ref data).ToUInt64() & 1) != 0; }
+        get { var data = new APPBARDATA(); data.Size = (uint)Marshal.SizeOf(data); data.Window = FindWindow("Shell_TrayWnd", null); if (data.Window == IntPtr.Zero) throw new InvalidOperationException("Windows taskbar is unavailable."); return (SHAppBarMessage(4, ref data).ToUInt64() & 1) != 0; }
         set {
             var data = new APPBARDATA(); data.Size = (uint)Marshal.SizeOf(data); data.Window = FindWindow("Shell_TrayWnd", null);
             if (data.Window == IntPtr.Zero) throw new InvalidOperationException("Windows taskbar is unavailable.");
@@ -187,11 +187,20 @@ sealed class ToggleContext : ApplicationContext {
     SettingsForm form;
     Action<Preferences> persistShortcuts;
     string[] shortcutPaths;
+    Action<string> createDesktop;
+    Action toggleTaskbar;
+    Func<bool> readTaskbar;
+    Action<string, string> showWarning;
+    DateTime lastToggleWarning = DateTime.MinValue;
     bool exiting;
     public string T(string cn, string en) { return Settings.Language == "zh" ? cn : en; }
     public ToggleContext(bool background) : this(background, Shortcuts.Apply, Shortcuts.TransactionPaths) { }
-    internal ToggleContext(bool background, Action<Preferences> updateShortcuts, string[] files) {
+    internal ToggleContext(bool background, Action<Preferences> updateShortcuts, string[] files)
+        : this(background, updateShortcuts, files, Shortcuts.Desktop, delegate { Native.AutoHide = !Native.AutoHide; }, delegate { return Native.AutoHide; }, null) { }
+    internal ToggleContext(bool background, Action<Preferences> updateShortcuts, string[] files, Action<string> desktopAction, Action toggleAction, Func<bool> readAction, Action<string, string> warningAction) {
         persistShortcuts = updateShortcuts; shortcutPaths = files;
+        createDesktop = desktopAction; toggleTaskbar = toggleAction; readTaskbar = readAction;
+        showWarning = warningAction ?? delegate(string title, string message) { tray.ShowBalloonTip(4000, title, message, ToolTipIcon.Warning); };
         Settings = Preferences.Load(); listener = new Listener(this);
         Registered = Native.RegisterHotKey(listener.Handle, HotkeyId, Settings.Modifiers | 0x4000, Settings.Key);
         LoadIcon(); tray = new NotifyIcon { Icon = CurrentIcon, Visible = true }; tray.DoubleClick += delegate { ShowSettings(); }; UpdateTray(); WriteReady();
@@ -223,7 +232,25 @@ sealed class ToggleContext : ApplicationContext {
         form.Activate(); Native.SetForegroundWindow(form.Handle); form.RefreshState();
     }
     public void SettingsClosed(SettingsForm closed) { if (form == closed) form = null; ExitThread(); }
-    public void Toggle() { Native.AutoHide = !Native.AutoHide; if (form != null && !form.IsDisposed) form.RefreshState(); }
+    public void CreateDesktopShortcut() { createDesktop(Settings.IconPath); }
+    public bool TryReadAutoHide(out bool enabled) {
+        try { enabled = readTaskbar(); return true; }
+        catch (Exception ex) { Debug.WriteLine("Taskbar Toggle status unavailable: " + ex.Message); enabled = false; return false; }
+    }
+    public bool Toggle() {
+        try { toggleTaskbar(); if (form != null && !form.IsDisposed) form.RefreshState(); return true; }
+        catch (Exception ex) {
+            Debug.WriteLine("Taskbar Toggle switch failed: " + ex.Message);
+            try { if (form != null && !form.IsDisposed) form.ReportToggleFailure(); } catch (Exception displayError) { Debug.WriteLine(displayError.Message); }
+            // Non-modal, rate-limited notification: never interrupt the background message loop.
+            if ((DateTime.UtcNow - lastToggleWarning).TotalSeconds >= 10) {
+                lastToggleWarning = DateTime.UtcNow;
+                try { showWarning(T("暂时无法切换任务栏", "Unable to toggle taskbar"), T("任务栏暂时不可用，资源管理器可能正在重启。请稍后重试，工具仍在运行。", "The taskbar may be unavailable while Explorer restarts. Try again shortly; the tool is still running.")); }
+                catch (Exception notificationError) { Debug.WriteLine(notificationError.Message); }
+            }
+            return false;
+        }
+    }
     public void Apply(Preferences next, byte[] iconBytes) {
         if (next.Modifiers == 0 || next.Key == 0) throw new InvalidOperationException(T("请使用 Ctrl、Alt 或 Shift 加一个按键。", "Use Ctrl, Alt or Shift together with a key."));
         bool changed = !Registered || next.Modifiers != Settings.Modifiers || next.Key != Settings.Key;
@@ -233,7 +260,9 @@ sealed class ToggleContext : ApplicationContext {
         catch { if (changed) Native.UnregisterHotKey(listener.Handle, candidate); throw; }
         // Persistence has committed. No later diagnostic failure may undo this registration.
         if (changed) { if (Registered) Native.UnregisterHotKey(listener.Handle, HotkeyId); HotkeyId = candidate; }
+        string previousIcon = Settings.IconPath;
         Registered = true; Settings = next; LoadIcon(); UpdateTray(); WriteReady();
+        Icons.CleanupPrevious(previousIcon, Settings.IconPath);
     }
     protected override void ExitThreadCore() {
         if (exiting) return; exiting = true;

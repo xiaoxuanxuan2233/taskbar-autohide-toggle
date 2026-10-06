@@ -41,7 +41,7 @@ sealed class SettingsForm : Form {
         subtitle = UI.Label("", false); UI.Add(content, subtitle); UI.Add(content, UI.Divider());
         status = UI.Label("", true); UI.Add(content, status);
         statusHelp = UI.Label("", false); UI.Add(content, statusHelp);
-        toggle = UI.Button("", true); toggle.Click += delegate { Try(delegate { context.Toggle(); }); }; UI.Add(content, UI.Flow(toggle));
+        toggle = UI.Button("", true); toggle.Click += delegate { context.Toggle(); }; UI.Add(content, UI.Flow(toggle));
         UI.Add(content, UI.Divider());
         shortcutTitle = UI.Label("", true); UI.Add(content, shortcutTitle);
         shortcut = new TextBox { ReadOnly = true, Dock = DockStyle.Top, Font = new Font("Segoe UI", 13), BackColor = UI.Soft, BorderStyle = BorderStyle.FixedSingle, Text = Program.HotkeyText(pending.Modifiers, pending.Key), AccessibleName = "Shortcut / 快捷键", Margin = new Padding(0, 0, 0, 10) }; UI.Add(content, shortcut); shortcut.KeyDown += CaptureShortcut;
@@ -58,7 +58,7 @@ sealed class SettingsForm : Form {
         restore.Click += delegate { pending.IconPath = ""; iconBytes = null; using (var icon = Icon.ExtractAssociatedIcon(Application.ExecutablePath)) SetPreview(icon.ToBitmap()); feedback.Text = T("点保存应用默认图标。", "Save to apply the default icon."); };
         UI.Add(content, UI.Flow(preview, choose, restore)); UI.Add(content, UI.Divider());
         desktop = UI.Button("", false); hide = UI.Button("", false); save = UI.Button("", true);
-        desktop.Click += delegate { if (Apply()) Try(delegate { Shortcuts.Desktop(context.Settings.IconPath); feedback.Text = T("桌面快捷方式已创建。", "Desktop shortcut created."); }); };
+        desktop.Click += delegate { Try(delegate { context.CreateDesktopShortcut(); feedback.Text = T("桌面快捷方式已创建。修改的设置请点“保存设置”生效。", "Desktop shortcut created. Click Save settings to apply pending changes."); }); };
         hide.Click += delegate { Hide(); }; save.Click += delegate { Apply(); };
         UI.Add(content, UI.Flow(save, desktop, hide));
         feedback = UI.Label("", false); feedback.Margin = new Padding(0, 12, 0, 8); UI.Add(content, feedback);
@@ -92,11 +92,19 @@ sealed class SettingsForm : Form {
         RefreshState(); WrapLabels();
     }
     public void RefreshState() {
-        bool enabled = Native.AutoHide; status.Text = T("自动隐藏 · ", "Auto-hide · ") + (enabled ? T("已开启", "On") : T("已关闭", "Off"));
+        bool enabled;
+        if (!context.TryReadAutoHide(out enabled)) {
+            status.Text = T("自动隐藏 · 暂不可用", "Auto-hide · Unavailable");
+            toggle.Text = T("重试切换", "Retry toggle");
+            statusHelp.Text = T("资源管理器可能正在重启，请稍后再试。", "Explorer may be restarting. Try again shortly.");
+            return;
+        }
+        status.Text = T("自动隐藏 · ", "Auto-hide · ") + (enabled ? T("已开启", "On") : T("已关闭", "Off"));
         toggle.Text = enabled ? T("关闭自动隐藏", "Turn auto-hide off") : T("开启自动隐藏", "Turn auto-hide on");
         statusHelp.Text = T("开启后，鼠标移到屏幕底部会显示任务栏。", "When enabled, move the pointer to the bottom edge to reveal the taskbar.");
         if (!context.Registered) feedback.Text = T("当前快捷键被占用，请设置新组合并保存。", "The current shortcut is in use. Record another combination and save.");
     }
+    public void ReportToggleFailure() { RefreshState(); feedback.Text = T("暂时无法切换任务栏。请稍后重试，工具仍在运行。", "Unable to toggle the taskbar. Try again shortly; the tool is still running."); }
     void CaptureShortcut(object sender, KeyEventArgs e) {
         if (e.Modifiers == Keys.None && (e.KeyCode == Keys.Tab || e.KeyCode == Keys.Escape || e.KeyCode == Keys.Enter)) return;
         e.SuppressKeyPress = true; e.Handled = true;

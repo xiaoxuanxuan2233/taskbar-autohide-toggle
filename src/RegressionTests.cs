@@ -29,6 +29,7 @@ static class RegressionTests {
             FailedSave(results, Path.Combine(root, "enable-startup"), false, false);
             FailedSave(results, Path.Combine(root, "shortcut-failure"), true, true);
             FailedRollback(results, Path.Combine(root, "rollback-failure"));
+            InteractionTests.Run(results, root);
         } finally { Program.DataPath = previous; }
     }
     static void Closing(List<string> results, string root) {

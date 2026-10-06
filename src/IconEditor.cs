@@ -7,6 +7,18 @@ using System.IO;
 using System.Windows.Forms;
 
 static class Icons {
+    public static void CleanupPrevious(string previous, string current) {
+        if (String.IsNullOrEmpty(previous) || String.Equals(previous, current, StringComparison.OrdinalIgnoreCase)) return;
+        try {
+            if (!File.Exists(previous)) return;
+            string oldFile = Native.ActualPath(previous);
+            string dataDirectory = Path.GetDirectoryName(Native.ActualPath(Program.ConfigPath));
+            if (!String.Equals(Path.GetDirectoryName(oldFile), dataDirectory, StringComparison.OrdinalIgnoreCase)) return;
+            if (!System.Text.RegularExpressions.Regex.IsMatch(Path.GetFileName(oldFile), @"^custom-[0-9a-fA-F]{32}\.ico$")) return;
+            if (!String.IsNullOrEmpty(current) && File.Exists(current) && String.Equals(oldFile, Native.ActualPath(current), StringComparison.OrdinalIgnoreCase)) return;
+            File.Delete(oldFile);
+        } catch (Exception ex) { System.Diagnostics.Debug.WriteLine("Taskbar Toggle previous icon cleanup failed: " + ex.Message); }
+    }
     public static Bitmap Read(string path) {
         using (var file = File.OpenRead(path)) {
             if (Path.GetExtension(path).Equals(".ico", StringComparison.OrdinalIgnoreCase)) { using (var icon = new Icon(file, 256, 256)) return icon.ToBitmap(); }
