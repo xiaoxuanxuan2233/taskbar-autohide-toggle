@@ -1,0 +1,7 @@
+dist/
+ready.txt
+query.txt
+last-toggle.txt
+error.txt
+*.before-*
+*.bin
