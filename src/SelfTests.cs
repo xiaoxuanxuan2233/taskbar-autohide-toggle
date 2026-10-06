@@ -52,7 +52,9 @@ static class SelfTests {
                 finally { Native.UnregisterHotKey(first.Handle, 101); }
                 results.Add("PASS: global hotkey registration and conflict detection");
             }
-            results.Add("PASS: default shortcut " + Program.HotkeyText(3, (uint)Keys.Z)); File.WriteAllLines(report, results.ToArray());
+            results.Add("PASS: default shortcut " + Program.HotkeyText(3, (uint)Keys.Z));
+            RegressionTests.Run(results, directory);
+            File.WriteAllLines(report, results.ToArray());
         } catch (Exception ex) { results.Add("FAIL: " + ex); File.WriteAllLines(report, results.ToArray()); Environment.ExitCode = 1; }
         finally { Program.DataPath = previous; }
     }

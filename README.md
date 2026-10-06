@@ -4,7 +4,11 @@
 
 **[⬇ 下载 EXE / Download EXE](https://github.com/xiaoxuanxuan2233/taskbar-autohide-toggle/raw/refs/heads/main/downloads/TaskbarToggle.exe)** · **[⬇ 下载 ZIP（含中英文说明）/ ZIP with guides](https://github.com/xiaoxuanxuan2233/taskbar-autohide-toggle/raw/refs/heads/main/downloads/TaskbarToggle-Windows-x64.zip)**
 
-Windows 10 / 11 · x64 · v2.0 · 双击即可打开设置 / Double-click to open settings.
+Windows 10 / 11 · x64 · v2.0.1 · 双击即可打开设置 / Double-click to open settings.
+
+v2.0.1 修复：关机 / 注销可正常退出；诊断文件写入失败不影响快捷键；保存失败时恢复自启、桌面入口及配置。
+
+v2.0.1 fixes: allow shutdown / sign-out, keep hotkeys working when diagnostic writes fail, and roll back startup, desktop and configuration changes when saving fails.
 
 ## 中文使用说明
 

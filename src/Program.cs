@@ -8,8 +8,8 @@ using System.Threading;
 using System.Windows.Forms;
 using System.Xml.Serialization;
 
-[assembly: System.Reflection.AssemblyVersion("2.0.0.0")]
-[assembly: System.Reflection.AssemblyFileVersion("2.0.0.0")]
+[assembly: System.Reflection.AssemblyVersion("2.0.1.0")]
+[assembly: System.Reflection.AssemblyFileVersion("2.0.1.0")]
 [assembly: System.Reflection.AssemblyTitle("Taskbar Toggle")]
 
 public class Preferences {
@@ -130,6 +130,51 @@ static class Shortcuts {
     }
     public static void Desktop(string icon) { Write(DesktopPath, StableExe(), "", icon); }
     public static void RefreshDesktop(string icon) { if (File.Exists(DesktopPath)) Desktop(icon); }
+    public static void Apply(Preferences next) { Startup(next.Startup, next.IconPath); RefreshDesktop(next.IconPath); }
+    public static string[] TransactionPaths { get { return new[] { StartupPath, DesktopPath, Path.Combine(Program.DataPath, "TaskbarToggle.exe") }; } }
+}
+
+// Snapshots are created before any writes, and used only during an explicit save.
+// A failed rollback is reported; it must never be mistaken for a successful save.
+sealed class SettingsTransaction {
+    sealed class Snapshot {
+        public string Path;
+        public byte[] Bytes;
+        public Snapshot(string path) { Path = path; Bytes = File.Exists(path) ? File.ReadAllBytes(path) : null; }
+        public void Restore() {
+            bool exists = File.Exists(Path);
+            if (Bytes == null) { if (exists) { File.Delete(Path); Native.SHChangeNotify(0x4, 5, Path, IntPtr.Zero); } return; }
+            if (exists) {
+                byte[] current = File.ReadAllBytes(Path);
+                bool same = current.Length == Bytes.Length;
+                for (int i = 0; same && i < current.Length; i++) same = current[i] == Bytes[i];
+                if (same) return;
+            }
+            File.WriteAllBytes(Path, Bytes); Native.SHChangeNotify(0x2000, 5, Path, IntPtr.Zero);
+        }
+    }
+    public static void Save(Preferences next, byte[] iconBytes, Action<Preferences> updateShortcuts, string[] shortcutPaths) {
+        var snapshots = new System.Collections.Generic.List<Snapshot>();
+        foreach (string path in shortcutPaths) snapshots.Add(new Snapshot(path));
+        snapshots.Add(new Snapshot(Program.ConfigPath)); snapshots.Add(new Snapshot(Program.ConfigPath + ".tmp"));
+        string newIcon = null;
+        try {
+            if (iconBytes != null) {
+                newIcon = Path.Combine(Program.DataPath, "custom-" + Guid.NewGuid().ToString("N") + ".ico");
+                File.WriteAllBytes(newIcon, iconBytes); next.IconPath = Native.ActualPath(newIcon);
+            }
+            updateShortcuts(next); next.Save();
+        } catch (Exception original) {
+            var failures = new System.Collections.Generic.List<Exception>();
+            for (int i = snapshots.Count - 1; i >= 0; i--) try { snapshots[i].Restore(); } catch (Exception ex) { failures.Add(ex); }
+            if (newIcon != null) try { if (File.Exists(newIcon)) File.Delete(newIcon); } catch (Exception ex) { failures.Add(ex); }
+            if (failures.Count > 0) {
+                failures.Insert(0, original);
+                throw new InvalidOperationException(next.Language == "zh" ? "保存失败，部分文件未能恢复。请检查文件权限后重新保存。" : "Save failed and some files could not be restored. Check file permissions and save again.", new AggregateException(failures));
+            }
+            throw;
+        }
+    }
 }
 
 sealed class ToggleContext : ApplicationContext {
@@ -140,14 +185,22 @@ sealed class ToggleContext : ApplicationContext {
     NotifyIcon tray;
     Listener listener;
     SettingsForm form;
+    Action<Preferences> persistShortcuts;
+    string[] shortcutPaths;
+    bool exiting;
     public string T(string cn, string en) { return Settings.Language == "zh" ? cn : en; }
-    public ToggleContext(bool background) {
+    public ToggleContext(bool background) : this(background, Shortcuts.Apply, Shortcuts.TransactionPaths) { }
+    internal ToggleContext(bool background, Action<Preferences> updateShortcuts, string[] files) {
+        persistShortcuts = updateShortcuts; shortcutPaths = files;
         Settings = Preferences.Load(); listener = new Listener(this);
         Registered = Native.RegisterHotKey(listener.Handle, HotkeyId, Settings.Modifiers | 0x4000, Settings.Key);
         LoadIcon(); tray = new NotifyIcon { Icon = CurrentIcon, Visible = true }; tray.DoubleClick += delegate { ShowSettings(); }; UpdateTray(); WriteReady();
         if (!background || !Registered) ShowSettings();
     }
-    void WriteReady() { File.WriteAllText(Path.Combine(Program.DataPath, "ready.txt"), "Hotkey=" + Program.HotkeyText(Settings.Modifiers, Settings.Key) + "; Registered=" + Registered + "; PID=" + Process.GetCurrentProcess().Id); }
+    void WriteReady() {
+        try { File.WriteAllText(Path.Combine(Program.DataPath, "ready.txt"), "Hotkey=" + Program.HotkeyText(Settings.Modifiers, Settings.Key) + "; Registered=" + Registered + "; PID=" + Process.GetCurrentProcess().Id); }
+        catch (Exception ex) { Debug.WriteLine("Taskbar Toggle diagnostic write failed: " + ex.Message); }
+    }
     void LoadIcon() {
         Icon replacement;
         try { replacement = Settings.IconPath.Length > 0 ? new Icon(Settings.IconPath, 32, 32) : Icon.ExtractAssociatedIcon(Application.ExecutablePath); }
@@ -169,23 +222,21 @@ sealed class ToggleContext : ApplicationContext {
         form.Show(); if (form.WindowState == FormWindowState.Minimized) form.WindowState = FormWindowState.Normal;
         form.Activate(); Native.SetForegroundWindow(form.Handle); form.RefreshState();
     }
+    public void SettingsClosed(SettingsForm closed) { if (form == closed) form = null; ExitThread(); }
     public void Toggle() { Native.AutoHide = !Native.AutoHide; if (form != null && !form.IsDisposed) form.RefreshState(); }
     public void Apply(Preferences next, byte[] iconBytes) {
         if (next.Modifiers == 0 || next.Key == 0) throw new InvalidOperationException(T("请使用 Ctrl、Alt 或 Shift 加一个按键。", "Use Ctrl, Alt or Shift together with a key."));
         bool changed = !Registered || next.Modifiers != Settings.Modifiers || next.Key != Settings.Key;
         int candidate = HotkeyId == 1 ? 2 : 1;
         if (changed && !Native.RegisterHotKey(listener.Handle, candidate, next.Modifiers | 0x4000, next.Key)) throw new InvalidOperationException(T("这个快捷键已被其他程序占用，请换一个。", "This shortcut is already in use. Choose another combination."));
-        try {
-            if (iconBytes != null) {
-                string iconPath = Path.Combine(Program.DataPath, "custom-" + Guid.NewGuid().ToString("N") + ".ico");
-                File.WriteAllBytes(iconPath, iconBytes); next.IconPath = Native.ActualPath(iconPath);
-            }
-            Shortcuts.Startup(next.Startup, next.IconPath); Shortcuts.RefreshDesktop(next.IconPath); next.Save();
-            if (changed) { if (Registered) Native.UnregisterHotKey(listener.Handle, HotkeyId); HotkeyId = candidate; }
-            Registered = true; Settings = next; LoadIcon(); UpdateTray(); WriteReady();
-        } catch { if (changed) Native.UnregisterHotKey(listener.Handle, candidate); throw; }
+        try { SettingsTransaction.Save(next, iconBytes, persistShortcuts, shortcutPaths); }
+        catch { if (changed) Native.UnregisterHotKey(listener.Handle, candidate); throw; }
+        // Persistence has committed. No later diagnostic failure may undo this registration.
+        if (changed) { if (Registered) Native.UnregisterHotKey(listener.Handle, HotkeyId); HotkeyId = candidate; }
+        Registered = true; Settings = next; LoadIcon(); UpdateTray(); WriteReady();
     }
     protected override void ExitThreadCore() {
+        if (exiting) return; exiting = true;
         Native.UnregisterHotKey(listener.Handle, 1); Native.UnregisterHotKey(listener.Handle, 2);
         if (form != null) { form.AllowExit = true; form.Close(); form.Dispose(); }
         tray.Visible = false; tray.ContextMenuStrip.Dispose(); tray.Dispose(); CurrentIcon.Dispose(); listener.DestroyHandle(); base.ExitThreadCore();

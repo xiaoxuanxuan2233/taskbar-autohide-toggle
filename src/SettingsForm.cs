@@ -63,7 +63,8 @@ sealed class SettingsForm : Form {
         UI.Add(content, UI.Flow(save, desktop, hide));
         feedback = UI.Label("", false); feedback.Margin = new Padding(0, 12, 0, 8); UI.Add(content, feedback);
         language.SelectedIndexChanged += delegate { pending.Language = language.SelectedIndex == 0 ? "zh" : "en"; Translate(); };
-        FormClosing += delegate(object sender, FormClosingEventArgs e) { if (!AllowExit) { e.Cancel = true; Hide(); } };
+        FormClosing += delegate(object sender, FormClosingEventArgs e) { if (!AllowExit && e.CloseReason == CloseReason.UserClosing) { e.Cancel = true; Hide(); } };
+        FormClosed += delegate { if (!AllowExit) context.SettingsClosed(this); };
         Activated += delegate { RefreshState(); };
         viewport.Resize += delegate { WrapLabels(); };
         Translate(); WrapLabels();
